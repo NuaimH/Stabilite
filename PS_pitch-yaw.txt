@@ -1,0 +1,108 @@
+#include <Wire.h>
+#include <MPU6050.h>
+#include <Servo.h>
+
+// Servo objects
+Servo servoYaw;    // Controls yaw (was roll) - pin 3
+Servo servoPitch;  // Controls pitch - pin 9
+
+// MPU6050 object
+MPU6050 mpu;
+
+// Stabilization variables
+float accX, accY, accZ;
+float gyroX, gyroY, gyroZ;
+float angleYaw = 0, anglePitch = 0;  // initialize angles
+float prevYaw = 90, prevPitch = 90;
+
+// Calibration offsets (adjust as needed)
+int16_t accelOffsetX = -1752;
+int16_t accelOffsetY = 194;
+int16_t accelOffsetZ = 616;
+int16_t gyroOffsetX = 165;
+int16_t gyroOffsetY = -56;
+int16_t gyroOffsetZ = -6;
+
+// Tuning parameters
+float STABILIZATION_STRENGTH = 0.5;  // Higher = more compensation
+float FILTER_COEFFICIENT = 0.2;      // Complementary filter
+unsigned long lastTime = 0;
+float dt;
+
+void setup() {
+  Serial.begin(115200);
+  Wire.begin();
+
+  servoYaw.attach(3);     // Yaw servo
+  servoPitch.attach(9);   // Pitch servo
+
+  mpu.initialize();
+
+  mpu.setXAccelOffset(accelOffsetX);
+  mpu.setYAccelOffset(accelOffsetY);
+  mpu.setZAccelOffset(accelOffsetZ);
+  mpu.setXGyroOffset(gyroOffsetX);
+  mpu.setYGyroOffset(gyroOffsetY);
+  mpu.setZGyroOffset(gyroOffsetZ);
+
+  if (!mpu.testConnection()) {
+    Serial.println("MPU6050 connection failed!");
+    while (1);
+  }
+
+  Serial.println("Parkinson's Spoon (Pitch + Yaw) Stabilization Active");
+  servoYaw.write(90);
+  servoPitch.write(90);
+  delay(1000);
+}
+
+void loop() {
+  unsigned long now = millis();
+  dt = (now - lastTime) / 1000.0;
+  lastTime = now;
+
+  int16_t ax, ay, az, gx, gy, gz;
+  mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+
+  accX = ax / 16384.0;
+  accY = ay / 16384.0;
+  accZ = az / 16384.0;
+
+  gyroY = gy / 131.0;  // Pitch
+  gyroZ = gz / 131.0;  // Yaw
+
+  // Estimate pitch angle from accelerometer
+  float accAnglePitch = atan2(-accX, accZ) * RAD_TO_DEG;
+
+  // Estimate yaw angle: no reliable accelerometer measurement, so rely mostly on gyro
+  float accAngleYaw = atan2(accX, accY) * RAD_TO_DEG;  // Not very accurate — gyro dominates
+
+  // Complementary filter
+  anglePitch = FILTER_COEFFICIENT * accAnglePitch + (1 - FILTER_COEFFICIENT) * (anglePitch + gyroY * dt);
+  angleYaw   = (angleYaw + gyroZ * dt);  // No reliable accel input — no filter
+
+  // Servo positions (invert as needed for direction)
+  int pitchPos = 90 - (anglePitch * STABILIZATION_STRENGTH);
+  int yawPos   = 90 - (angleYaw * STABILIZATION_STRENGTH);
+
+  // Constrain movement range
+  pitchPos = constrain(pitchPos, 60, 120);
+  yawPos   = constrain(yawPos, 60, 120);
+
+  // Move servos
+  servoPitch.write(pitchPos);
+  servoYaw.write(yawPos);
+
+  // Debug output
+  Serial.print("Yaw: ");
+  Serial.print(yawPos);
+  Serial.print("°\tPitch: ");
+  Serial.print(pitchPos);
+  Serial.print("°\tRaw Yaw: ");
+  Serial.print(angleYaw, 1);
+  Serial.print("°, Pitch: ");
+  Serial.print(anglePitch, 1);
+  Serial.println("°");
+
+  delay(10);
+}

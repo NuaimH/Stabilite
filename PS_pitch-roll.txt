@@ -1,0 +1,117 @@
+#include <Wire.h>
+#include <MPU6050.h>
+#include <Servo.h>
+
+// Servo objects
+Servo servoRoll;   // Controls roll (pin 3)
+Servo servoPitch;  // Controls pitch (pin 9)
+
+// MPU6050 object
+MPU6050 mpu;
+
+// Stabilization variables
+float accX, accY, accZ;
+float gyroX, gyroY, gyroZ;
+float angleRoll, anglePitch;
+float prevRoll = 90, prevPitch = 90;  // Neutral positions (90°)
+
+// Calibration offsets (run calibration first!)
+int16_t accelOffsetX = -1752;
+int16_t accelOffsetY = 194;
+int16_t accelOffsetZ = 616;
+int16_t gyroOffsetX = 165;
+int16_t gyroOffsetY = -56;
+int16_t gyroOffsetZ = -6;
+
+// Stabilization parameters (tune these)
+float STABILIZATION_STRENGTH = 0.5;  // 0.1-1.0 (higher = more aggressive)
+float FILTER_COEFFICIENT = 0.2;       // 0.1-0.3 (higher = smoother but slower)
+unsigned long lastTime = 0;
+float dt;
+
+void setup() {
+  Serial.begin(115200);
+  Wire.begin();
+  
+  // Attach servos
+  servoRoll.attach(3);
+  servoPitch.attach(9);
+  
+  // Initialize MPU6050
+  mpu.initialize();
+  
+  // Set custom offsets
+  mpu.setXAccelOffset(accelOffsetX);
+  mpu.setYAccelOffset(accelOffsetY);
+  mpu.setZAccelOffset(accelOffsetZ);
+  mpu.setXGyroOffset(gyroOffsetX);
+  mpu.setYGyroOffset(gyroOffsetY);
+  mpu.setZGyroOffset(gyroOffsetZ);
+  
+  // Verify connection
+  if (!mpu.testConnection()) {
+    Serial.println("MPU6050 connection failed!");
+    while(1);
+  }
+  
+  Serial.println("Parkinson's Spoon Stabilization Active");
+  Serial.println("===================================");
+  
+  // Center servos
+  servoRoll.write(90);
+  servoPitch.write(90);
+  delay(1000);  // Allow servos to settle
+}
+
+void loop() {
+  // Calculate time difference
+  unsigned long now = millis();
+  dt = (now - lastTime) / 1000.0;  // Convert to seconds
+  lastTime = now;
+  
+  // Read raw sensor data
+  int16_t ax, ay, az, gx, gy, gz;
+  mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+  
+  // Convert accelerometer to g-forces
+  float accX = ax / 16384.0;
+  float accY = ay / 16384.0;
+  float accZ = az / 16384.0;
+  
+  // Convert gyro to deg/sec
+  float gyroX = gx / 131.0;
+  float gyroY = gy / 131.0;
+  
+  // Calculate angles from accelerometer
+  float accAngleRoll = atan2(accY, accZ) * RAD_TO_DEG;
+  float accAnglePitch = atan2(-accX, accZ) * RAD_TO_DEG;
+  
+  // Complementary filter combines accel and gyro
+  angleRoll = FILTER_COEFFICIENT * accAngleRoll + (1 - FILTER_COEFFICIENT) * (angleRoll + gyroX * dt);
+  anglePitch = FILTER_COEFFICIENT * accAnglePitch + (1 - FILTER_COEFFICIENT) * (anglePitch + gyroY * dt);
+  
+  // Calculate servo positions (invert for stabilization)
+  int rollPos = 90 + (angleRoll * STABILIZATION_STRENGTH);
+  int pitchPos = 90 - (anglePitch * STABILIZATION_STRENGTH);
+  
+  // Constrain servo range (safety limits)
+  rollPos = constrain(rollPos, 60, 120);
+  pitchPos = constrain(pitchPos, 60, 120);
+  
+  // Move servos
+  servoRoll.write(rollPos);
+  servoPitch.write(pitchPos);
+  
+  // Debug output
+  Serial.print("Roll: ");
+  Serial.print(rollPos);
+  Serial.print("°\tPitch: ");
+  Serial.print(pitchPos);
+  Serial.print("°\tTremor: ");
+  Serial.print(angleRoll, 1);
+  Serial.print("°, ");
+  Serial.print(anglePitch, 1);
+  Serial.println("°");
+  
+  delay(10);  // ~100Hz update rate
+}
